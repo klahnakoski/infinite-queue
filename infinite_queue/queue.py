@@ -7,38 +7,40 @@
 #
 # Contact: Kyle Lahnakoski (kyle@lahnakoski.com)
 #
+from mo_sql import SQL
 
 from infinite_queue.utils import MESSAGES, QUEUE
-from jx_sqlite.sqlite import sql_insert, sql_query, sql_update
-from mo_dots import listwrap, Data
+from jx_sqlite.sqlite import sql_insert, sql_query, sql_update, quote_value
+from jx_sqlite.utils import first_row, rows
+from mo_dots import listwrap, Data, wrap
 from mo_future import first, text
-from mo_json import value2json
+from mo_json import value2json, json2value
 from mo_kwargs import override
-from mo_times import MINUTE, Date
+from mo_times import Date
 from vendor.mo_logs import Log
 
 
 class Queue:
     @override
-    def __init__(self, id, broker, name, bucket, confirm_delay=MINUTE):
+    def __init__(self, id, broker, name):
         self.id = id
         self.broker = broker
         self.name = name
-        self.bucket = bucket
-        self.confirm_delay = confirm_delay
 
     def push(self, message):
         # DETERMINE ULTIMATE LOCATION
         #
         now = Date.now()
+        message = wrap(message)
 
         with self.broker.db.transaction() as t:
             serial = self._next_serial(t)
+            key = self._key(now, serial)
             message.etl = listwrap(message.etl)
-            message.etl.add(
+            message.etl.append(
                 {
                     "queue": {
-                        "url": self._bucket_url(),
+                        "url": self.broker.backing.url(key),
                         "timestamp": now,
                         "date/time": now.format(),
                         "serial": serial,
@@ -53,6 +55,8 @@ class Queue:
             )
         return serial
 
+    add = push
+
     def flush(self):
         # ANY BLOCKS TO FLUSH?
         with self.broker.db.transaction() as t:
@@ -61,33 +65,27 @@ class Queue:
                     {
                         "select": ["block_size_mb", "block_start"],
                         "from": QUEUE,
-                        "where": {"and": [{"eq": {"id": self.id}}]},
+                        "where": {"eq": {"id": self.id}}
                     }
                 )
             )
-        self._flush(kwargs=result.data[0])
+        self._flush(kwargs=first_row(result))
 
     @override
     def _flush(self, block_size_mb, block_start):
-        if id != self.id:
-            Log.error("logic error")
-
         with self.broker.db.transaction() as t:
-            result = t.query(
-                sql_query(
-                    {
-                        "select": ["serial", "content"],
-                        "from": MESSAGES,
-                        "where": {
-                            "and": [
-                                {"gte": {"serial": block_start}},
-                                {"eq": {"queue": self.id}},
-                            ]
-                        },
-                        "sort": "serial",
-                    }
-                )
-            )
+            result = t.query(SQL(f"""
+                SELECT
+                    serial,
+                    content
+                FROM
+                    {MESSAGES}
+                WHERE
+                    serial >= {quote_value(block_start)} AND
+                    queue = {quote_value(self.id)}
+                ORDER BY
+                    serial
+            """))
 
         if not result.data:
             return
@@ -95,8 +93,8 @@ class Queue:
         def chunk():
             acc = []
             size = 0
-            start = result.data[0].serial
-            for r in result.data:
+            start = first_row(result).serial
+            for r in rows(result):
                 s = len(r.content) + 1
                 if acc and s + size > block_size_mb:
                     yield acc, start, False
@@ -108,10 +106,10 @@ class Queue:
                 yield acc, start, True
 
         for lines, start, is_last in chunk():
-            etl_first = lines[0].etl[0].queue
-            etl_last = lines[-1].etl[0].queue
+            etl_first = json2value(lines[0]).etl[0].queue
+            etl_last = json2value(lines[-1]).etl[0].queue
             key = self._key(kwargs=etl_first)
-            self.bucket.write_lines(self, key, lines)
+            self.broker.backing.write_lines(key, lines)
             result = Data(block_end=etl_last.serial + 1, block_write=Date.now())
             if not is_last:
                 # UPDATE start TO MARK MESSAGES FOR DB REMOVAL
@@ -126,25 +124,20 @@ class Queue:
             Log.error("expecting parameters")
         return Date(timestamp).format("%Y/%m/%d") + "/" + text(serial)
 
-    def _bucket_url(self):
-        Log.warning("no url yet")
-        return None
-
     def _next_serial(self, t):
         """
         EXPECTING AN OPEN TRANSACTION t
         """
-        next_id = first(
-            t.query(
-                sql_query(
-                    {
-                        "select": "next_serial",
-                        "from": QUEUE,
-                        "where": {"eq": {"id": self.id}},
-                    }
-                )
-            ).data
-        ).next_serial
+        result = t.query(
+            sql_query(
+                {
+                    "select": "next_serial",
+                    "from": QUEUE,
+                    "where": {"eq": {"id": self.id}},
+                }
+            )
+        )
+        (next_id,) = first(result.data)
 
         t.execute(
             sql_update(

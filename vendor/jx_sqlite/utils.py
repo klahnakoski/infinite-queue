@@ -17,8 +17,8 @@ from math import isnan
 from jx_base import DataClass
 from jx_base import Snowflake
 from jx_sqlite.sqlite import quote_column
-from mo_dots import Data, concat_field, is_data, is_list, join_field, split_field, is_sequence
-from mo_future import is_text, text
+from mo_dots import Data, concat_field, is_data, is_list, join_field, split_field, is_sequence, wrap
+from mo_future import is_text, text, first
 from mo_json import BOOLEAN, NESTED, NUMBER, OBJECT, STRING, json2value
 from mo_json.typed_encoder import untype_path
 from mo_logs import Log
@@ -323,3 +323,12 @@ class ColumnLocator(object):
             for c in self.columns
             if untype_path(c.name) == column_name
         ]
+
+
+def first_row(result):
+    return wrap(dict(zip(result.header, first(result.data))))
+
+
+def rows(result):
+    for d in result.data:
+        yield wrap(dict(zip(result.header, d)))

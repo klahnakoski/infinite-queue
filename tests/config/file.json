@@ -1,6 +1,7 @@
 {
   "broker": {
-    "db": {
+    "database": {
+      "upgrade": false,
       "filename": "tests/results/db.sqlite"
     },
     "backing": {
@@ -8,7 +9,7 @@
     }
   },
   "constants": {
-    "mo_http.http.headers": {
+    "mo_http.http.default_headers": {
       "referer": "infinite_queue"
     },
     "infinite_queue.broker.WRITE_INTERVAL": "second"

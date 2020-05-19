@@ -287,6 +287,20 @@ class File(object):
                 else:
                     f.write(d.encode("utf8"))
 
+    def write_lines(self, lines):
+        """
+        :param lines: iterable of text
+        :return:
+        """
+        if not self.parent.exists:
+            self.parent.create()
+        with open(self._filename, "wb") as f:
+            for d in lines:
+                if not is_text(d):
+                    Log.error(u"Expecting unicode data only")
+                f.write(d.encode("utf8"))
+                f.write(b"\n")
+
     def __iter__(self):
         # NOT SURE HOW TO MAXIMIZE FILE READ SPEED
         # http://stackoverflow.com/questions/8009882/how-to-read-large-file-line-by-line-in-python

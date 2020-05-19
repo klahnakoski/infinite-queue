@@ -3,6 +3,7 @@ from mo_files import File
 from mo_json import json2value
 from mo_logs import startup, constants, Log
 from mo_testing.fuzzytestcase import FuzzyTestCase
+from mo_threads import Till
 from mo_times import Date
 
 config=None
@@ -10,6 +11,7 @@ broker = None
 
 
 class TestDirectory(FuzzyTestCase):
+    @classmethod
     def setUpClass(cls):
         global config, broker
         try:
@@ -22,6 +24,7 @@ class TestDirectory(FuzzyTestCase):
         except Exception as e:
             Log.error("could not setup for testing", cause=e)
 
+    @classmethod
     def tearDownClass(cls):
         Log.stop()
 
@@ -31,12 +34,13 @@ class TestDirectory(FuzzyTestCase):
         queue.add(data)
 
         listener = broker.get_listener("test1")
-        serial, result = listener.pop()
-
+        serial, content = listener.pop()
         listener.confirm(serial)
 
-        self.assertAlmostEqual(result, {"a": 1, "b": 2})
-        content = (File(config.broker.backing.directory)/Date.now().format("%Y/%m/%d")/"1").read()
+        self.assertAlmostEqual(content, data)
+        queue.flush()
+
+        content = (File(config.broker.backing.directory)/Date.now().format("%Y/%m/%d")/"1.json").read()
         for line in content.split("/n"):
             self.assertAlmostEqual(json2value(line), data)
 

@@ -14,7 +14,7 @@ from jx_base import Column, Table, jx_expression
 from jx_base.meta_columns import META_COLUMNS_DESC, META_COLUMNS_NAME, SIMPLE_METADATA_COLUMNS
 from jx_base.schema import Schema
 from jx_python import jx
-from jx_sqlite.utils import untyped_column
+from jx_sqlite.utils import untyped_column, rows
 from jx_sqlite.expressions._utils import sql_type_to_json_type
 from mo_dots import Data, Null, coalesce, is_data, is_list, literal_field, startswith_field, tail_field, unwraplist, \
     wrap
@@ -76,7 +76,7 @@ class ColumnList(jx_base.Table, jx_base.Container):
             "where": {"eq": {"type": "table"}},
             "orderby": "name"
         }))
-        tables = wrap([{k: d for k, d in zip(result.header, row)} for row in result.data])
+        tables = wrap(list(rows(result)))
         last_nested_path = ["."]
         for table in tables:
             if table.name.startswith("__"):

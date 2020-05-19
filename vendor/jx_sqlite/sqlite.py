@@ -17,7 +17,7 @@ from collections import Mapping, namedtuple
 
 from jx_base import jx_expression
 from jx_python.convert import table2csv
-from mo_dots import Data, coalesce, unwraplist, listwrap, wrap
+from mo_dots import Data, coalesce, unwraplist, listwrap, wrap, Null
 from mo_files import File
 from mo_future import allocate_lock as _allocate_lock, text, first, is_text, zip_longest
 from mo_json import BOOLEAN, INTEGER, NESTED, NUMBER, OBJECT, STRING
@@ -144,6 +144,8 @@ class Sqlite(DB):
         )
         try:
             if not isinstance(db, _sqlite3.Connection):
+                if self.filename:
+                    File(self.filename).parent.create()
                 self.db = _sqlite3.connect(
                     database=coalesce(self.filename, ":memory:"),
                     check_same_thread=False,
@@ -672,10 +674,7 @@ def sql_query(command):
         if command.where.eq:
             acc.append(sql_eq(**command.where.eq))
         else:
-            from jx_sqlite.expressions import SQLang
-
-            where = SQLang[jx_expression(command.where)].to_sql[0].b
-            acc.append(where)
+            Log.error('Only basic {"eq":{var:value}} is supported')
 
     sort = coalesce(command.orderby, command.sort)
     if sort:
@@ -712,13 +711,14 @@ def sql_create(table, properties, primary_key=None, unique=None, foreign_key=Non
         acc.append(SQL_COMMA)
         acc.append(SQL(" UNIQUE "))
         acc.append(sql_iso(sql_list([quote_column(c) for c in listwrap(unique)])))
-    for fn, fv in foreign_key.items():
-        acc.append(SQL_COMMA)
-        acc.append(SQL("FOREIGN KEY"))
-        acc.append(sql_list(tuple(map(quote_column, listwrap(fn)))))
-        acc.append(" REFERENCES ")
-        acc.append(quote_column(fv.table))
-        acc.append(sql_iso(sql_list(tuple(map(quote_column, listwrap(fv.column))))))
+    if foreign_key:
+        for fn, fv in wrap(foreign_key).items():
+            acc.append(SQL_COMMA)
+            acc.append(SQL("FOREIGN KEY"))
+            acc.append(sql_iso(sql_list(tuple(map(quote_column, listwrap(fn))))))
+            acc.append(SQL(" REFERENCES "))
+            acc.append(quote_column(fv.table))
+            acc.append(sql_iso(sql_list(tuple(map(quote_column, listwrap(fv.column))))))
 
     acc.append(SQL_CP)
     return ConcatSQL(*acc)
@@ -739,14 +739,26 @@ def sql_insert(table, records):
 
 
 def sql_update(table, command):
-    return ConcatSQL(
+    global SQLang
+    command = wrap(command)
+    acc = [
         SQL_UPDATE,
         quote_column(table),
         SQL_SET,
         sql_list(sql_eq(**{k: v}) for k, v in command['set'].items()),
-        SQL_WHERE,
-        sql_eq(command.where)
-    )
+    ]
+
+    if command.where:
+        acc.append(SQL_WHERE)
+        if command.where.eq:
+            acc.append(sql_eq(**command.where.eq))
+        else:
+            from jx_sqlite.expressions._utils import SQLang
+
+            where = SQLang[jx_expression(command.where)].to_sql[0].b
+            acc.append(where)
+
+    return ConcatSQL(*acc)
 
 
 def version_table(db, version_table):
