@@ -1,0 +1,18 @@
+{
+  "broker": {
+    "db": {
+      "filename": "tests/results/db.sqlite"
+    },
+    "backing": {
+      "directory": "tests/results"
+    }
+  },
+  "constants": {
+    "mo_http.http.headers": {
+      "referer": "infinite_queue"
+    },
+    "infinite_queue.broker.WRITE_INTERVAL": "second"
+  },
+  "debug": {
+  }
+}

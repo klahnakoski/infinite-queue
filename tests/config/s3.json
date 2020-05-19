@@ -1,0 +1,17 @@
+{
+  "db": {
+    "filename": "tests/db.sqlite"
+  },
+  "backing": {
+      "bucket": "testing",
+      "public": true,
+      "key_format": "y/m/d/s",
+      "$ref": "file://~/private.json#aws_credentials"
+  },
+  "constants": {
+    "mo_http.http.headers": {"referer": "infinite_queue"}
+  },
+  "debug": {
+
+  }
+}
