@@ -17,7 +17,7 @@ from math import isnan
 from jx_base import DataClass
 from jx_base import Snowflake
 from jx_sqlite.sqlite import quote_column
-from mo_dots import Data, concat_field, is_data, is_list, join_field, split_field, is_sequence, wrap
+from mo_dots import Data, concat_field, is_data, is_list, join_field, split_field, is_sequence, wrap, Null
 from mo_future import is_text, text, first
 from mo_json import BOOLEAN, NESTED, NUMBER, OBJECT, STRING, json2value
 from mo_json.typed_encoder import untype_path
@@ -326,7 +326,10 @@ class ColumnLocator(object):
 
 
 def first_row(result):
-    return wrap(dict(zip(result.header, first(result.data))))
+    row = first(result.data)
+    if not row:
+        return Null
+    return wrap(dict(zip(result.header, row)))
 
 
 def rows(result):

@@ -170,7 +170,10 @@ class Broker:
         self.queues.append(output)
         return output
 
-    def get_subscriber(self, name):
+    def get_subscriber(self, name=None):
+        """
+        GET SUBSCRIBER BY id, OR BY QUEUE name
+        """
         with self.db.transaction() as t:
             result = t.query(
                 SQL(
@@ -200,9 +203,16 @@ class Broker:
 
             return Subscription(queue=queue, kwargs=first_row(sub_info))
 
-    def new_subscriber(
-        self, name, confirm_delay_seconds=60, next_emit_serial=1, look_ahead_serial=1000
+    def replay(
+        self,
+        name,
+        confirm_delay_seconds=60,
+        next_emit_serial=1,
+        look_ahead_serial=1000
     ):
+        """
+        A SUBSCRIBER FOR REVIEWING THE QUEUE CONTENTS, IN ORDER
+        """
         queue = self.get_or_create_queue(name)
         id = self.next_id()
 
