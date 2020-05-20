@@ -19,6 +19,7 @@ from mo_kwargs import override
 from mo_times import Date
 from vendor.mo_logs import Log
 
+DEBUG = True
 
 class Queue:
     @override
@@ -103,17 +104,21 @@ class Queue:
                 acc.append(r.content)
                 size += s
             if acc:
-                yield acc, start, True
+                if size > block_size_mb:
+                    yield acc, start, False  # EXACT BLOCK SIZE
+                else:
+                    yield acc, start, True
 
         for lines, start, is_last in chunk():
             etl_first = json2value(lines[0]).etl[0].queue
             etl_last = json2value(lines[-1]).etl[0].queue
             key = self._key(kwargs=etl_first)
+            Log.note("flush {{num}} lines to {{key}}", key=key, num=len(lines))
             self.broker.backing.write_lines(key, lines)
             result = Data(block_end=etl_last.serial + 1, block_write=Date.now())
             if not is_last:
                 # UPDATE start TO MARK MESSAGES FOR DB REMOVAL
-                result.block_start = etl_first.serial
+                result.block_start = etl_last.serial + 1
 
             with self.broker.db.transaction() as t:
                 t.execute(sql_update(QUEUE, {"set": result}))
@@ -122,7 +127,7 @@ class Queue:
     def _key(self, timestamp, serial):
         if not timestamp or not serial:
             Log.error("expecting parameters")
-        return Date(timestamp).format("%Y/%m/%d") + "/" + text(serial)
+        return self.name + "/" + Date(timestamp).format("%Y/%m/%d") + "/" + text(serial)
 
     def _next_serial(self, t):
         """

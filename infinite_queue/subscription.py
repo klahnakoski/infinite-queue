@@ -27,7 +27,13 @@ class Subscription:
 
     def pop(self):
         serial, content = self.pop_text()
-        return serial, json2value(content)
+        if not content:
+            return serial, None
+
+        try:
+            return serial, json2value(content)
+        except Exception as e:
+            Log.error("not expected", cause=e)
 
     def pop_text(self):
         with self.queue.broker.db.transaction() as t:
@@ -45,7 +51,7 @@ class Subscription:
                     WHERE
                         m.queue = {quote_value(self.queue.id)} AND
                         u.subscriber = {quote_value(self.id)} AND 
-                        u.deliver_time >= {quote_value(Date.now().unix - self.confirm_delay_seconds)}
+                        u.deliver_time <= {quote_value(Date.now().unix - self.confirm_delay_seconds)}
                     ORDER BY
                         u.deliver_time
                     LIMIT
@@ -54,18 +60,26 @@ class Subscription:
                 )
             )
 
+
             if result.data:
-                # RECORD IT WAS SENT AGAIN
                 record = first_row(result)
+                # RECORD IT WAS SENT AGAIN
+                now = Date.now()
                 t.execute(
                     sql_update(
                         UNCONFIRMED,
                         {
-                            "set": {"deliver_time": Date.now},
+                            "set": {"deliver_time": now},
                             "where": {
                                 "eq": {"subscriber": self.id, "serial": record.serial}
                             },
                         },
+                    )
+                )
+                t.execute(
+                    sql_update(
+                        SUBSCRIBER,
+                        {"set": {"last_emit_timestamp": now}}
                     )
                 )
                 return record.serial, record.content
@@ -89,16 +103,24 @@ class Subscription:
             content = first_row(result).content
 
             # RECORD IT WAS SENT
+            now = Date.now()
             t.execute(
                 sql_insert(
                     UNCONFIRMED,
                     {
                         "subscriber": self.id,
                         "serial": serial,
-                        "deliver_time": Date.now(),
+                        "deliver_time": now,
                     },
                 )
             )
+            t.execute(
+                sql_update(
+                    SUBSCRIBER,
+                    {"set": {"last_emit_timestamp": now}}
+                )
+            )
+
             return serial, content
 
     def confirm(self, serial):
@@ -108,6 +130,16 @@ class Subscription:
                 WHERE
                     subscriber = {quote_value(self.id)} AND
                     serial = {quote_value(serial)}
+            """))
+            t.execute(SQL(f"""
+                UPDATE {SUBSCRIBER} SET last_confirmed_serial=COALESCE(
+                    (
+                    SELECT min(serial) 
+                    FROM {UNCONFIRMED} AS u
+                    WHERE u.subscriber={quote_value(self.id)}
+                    ), 
+                    next_emit_serial               
+                )-1
             """))
 
     def _next_serial(self, t):

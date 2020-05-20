@@ -7,7 +7,7 @@
 #
 # Contact: Kyle Lahnakoski (kyle@lahnakoski.com)
 #
-from infinite_queue.queue import Queue
+from infinite_queue.queue import Queue, DEBUG
 from infinite_queue.subscription import Subscription
 from infinite_queue.utils import (
     VERSION_TABLE,
@@ -29,11 +29,8 @@ from jx_sqlite.sqlite import (
 from jx_sqlite.utils import first_row, rows
 from mo_future import first
 from mo_kwargs import override
-from mo_sql import (
-    ConcatSQL,
-    SQL,
-)
-from mo_threads import Till
+from mo_sql import ConcatSQL, SQL, JoinSQL, SQL_OR
+from mo_threads import Till, Signal, Thread
 from mo_times import Date, Duration
 from pyLibrary.aws import s3
 from vendor.mo_logs import Log
@@ -55,7 +52,8 @@ class Broker:
             self._setup()
         self.next_id = id_generator(db=self.db, version_table=VERSION_TABLE)
         self.queues = []
-        # self.cleaner = Thread.run("cleaner", self._cleaner)
+        self.please_stop = Signal()
+        self.cleaner = Thread.run("cleaner", self._cleaner)
 
     def _setup(self):
         version_table(db=self.db, version_table=VERSION_TABLE)
@@ -87,6 +85,7 @@ class Broker:
                         "look_ahead_serial": "LONG NOT NULL",
                         "last_confirmed_serial": "LONG NOT NULL",
                         "next_emit_serial": "LONG NOT NULL",
+                        "last_emit_timestamp": "DOUBLE NOT NULL",
                     },
                     foreign_key={"queue": {"table": QUEUE, "column": "id"}},
                 )
@@ -158,6 +157,7 @@ class Broker:
                             "look_ahead_serial": 1000,
                             "last_confirmed_serial": 0,
                             "next_emit_serial": 1,
+                            "last_emit_timestamp": Date.now(),
                         },
                     )
                 )
@@ -170,22 +170,22 @@ class Broker:
         self.queues.append(output)
         return output
 
-    def get_listener(self, name):
+    def get_subscriber(self, name):
         with self.db.transaction() as t:
             result = t.query(
                 SQL(
                     f"""
-                SELECT
-                    MIN(s.id) as id
-                FROM
-                    {SUBSCRIBER} AS s
-                LEFT JOIN 
-                    {QUEUE} as q on q.id = s.queue
-                WHERE
-                    q.name = {quote_value(name)}
-                GROUP BY 
-                    s.queue
-            """
+                    SELECT
+                        MIN(s.id) as id
+                    FROM
+                        {SUBSCRIBER} AS s
+                    LEFT JOIN 
+                        {QUEUE} as q on q.id = s.queue
+                    WHERE
+                        q.name = {quote_value(name)}
+                    GROUP BY 
+                        s.queue
+                    """
                 )
             )
             if not result:
@@ -200,26 +200,53 @@ class Broker:
 
             return Subscription(queue=queue, kwargs=first_row(sub_info))
 
+    def new_subscriber(
+        self, name, confirm_delay_seconds=60, next_emit_serial=1, look_ahead_serial=1000
+    ):
+        queue = self.get_or_create_queue(name)
+        id = self.next_id()
+
+        with self.db.transaction() as t:
+            t.execute(
+                sql_insert(
+                    table=SUBSCRIBER,
+                    records={
+                        "id": id,
+                        "queue": queue.id,
+                        "last_emit_timestamp": Date.now(),
+                        "confirm_delay_seconds": confirm_delay_seconds,
+                        "last_confirmed_serial": next_emit_serial - 1,
+                        "next_emit_serial": next_emit_serial,
+                        "look_ahead_serial": look_ahead_serial,
+                    },
+                )
+            )
+
+        return Subscription(
+            id=id, queue=queue, confirm_delay_seconds=confirm_delay_seconds
+        )
+
     def delete_queue(self, name):
         Log.error("You do not need to do this")
 
     def add_subscription(self, queue, serial_start=0):
         pass
 
-    def _push_to_s3(self):
+    def clean(self):
+        """
+        REMOVE ANY RECORDS THAT ARE NOT NEEDED BY QUEUE OR SUBSCRIBERS
+        """
         now = Date.now()
 
         # ANY BLOCKS TO FLUSH?
         with self.db.transaction() as t:
             result = t.query(
-                sql_query(
-                    {
-                        "select": ["id", "block_size_mb", "block_start"],
-                        "from": QUEUE,
-                        "where": {
-                            "lt": {"block_write": now - Duration(WRITE_INTERVAL)}
-                        },
-                    }
+                SQL(
+                    f"""
+                    SELECT id, block_size_mb, block_start
+                    FROM {QUEUE}
+                    WHERE block_write < {quote_value(now-Duration(WRITE_INTERVAL))}            
+                    """
                 )
             )
 
@@ -228,35 +255,58 @@ class Broker:
             queue._flush(**stale)
 
         # REMOVE UNREACHABLE MESSAGES
+        conditions = []
+        for q in self.queues:
+            conditions.append(
+                SQL(f"(queue = {quote_value(q.id)} AND serial IN (")
+                + SQL(
+                    f"""
+                    SELECT m.serial
+                    FROM {MESSAGES} AS m 
+                    LEFT JOIN {UNCONFIRMED} as u ON u.serial = m.serial
+                    LEFT JOIN {SUBSCRIBER} as s  ON s.queue = m.queue and s.id = u.subscriber 
+                    LEFT JOIN {QUEUE} as q ON q.id = m.queue and m.serial >= q.block_start
+                    LEFT JOIN {SUBSCRIBER} as la ON 
+                        la.queue = m.queue AND 
+                        la.last_confirmed_serial < m.serial AND 
+                        m.serial < la.next_emit_serial+la.look_ahead_serial
+                    WHERE 
+                        m.queue = {q.id} AND
+                        s.id IS NULL AND -- STILL UNCONFIRMED POP
+                        q.id IS NULL AND -- NOT WRITTEN TO S3 YET
+                        la.id IS NULL    -- NOT IN LOOK-AHEAD FOR SUBSCRIBER           
+                    """
+                )
+                + SQL("))")
+            )
+
         with self.db.transaction() as t:
-            t.execute(
-                ConcatSQL(
-                    SQL(
-                        f"""
-                    DELETE FROM {MESSAGES}
-                    WHERE serial, queue IN (
-                        SELECT m.serial, m.queue
-                        FROM {MESSAGES} AS m 
-                        LEFT JOIN {UNCONFIRMED} as u ON u.serial = m.serial
-                        LEFT JOIN {SUBSCRIBER} as s  ON s.queue = m.queue and s.id = u.subscriber 
-                        LEFT JOIN {QUEUE} as q ON m.queue=q.id and m.serial >= q.block_start
-                        LEFT JOIN {SUBSCRIBER} as la ON 
-                            la.queue = m.queue AND 
-                            la.last_confirmed_serial < m.serial AND 
-                            m.serial < la.next_emit_serial+la.look_ahead_serial
-                        WHERE 
-                            s.id IS NULL AND -- NOT USED BY ANY SUBSCRIBER
-                            q.id IS NULL AND -- NOT WRITTEN TO S3 YET
-                            la.id IS NULL    -- NOT USED BY SUBSCRIBER           
-                    )
-                """
+            if DEBUG:
+                result = t.query(
+                    ConcatSQL(
+                        SQL(f"SELECT count(1) AS `count` FROM {MESSAGES} WHERE "),
+                        JoinSQL(SQL_OR, conditions),
                     )
                 )
+                Log.note(
+                    "Delete {{num}} messages from database", num=first_row(result).count
+                )
+
+            t.execute(
+                ConcatSQL(
+                    SQL(f"DELETE FROM {MESSAGES} WHERE "), JoinSQL(SQL_OR, conditions)
+                )
             )
+
+    def close(self):
+        self.please_stop.go()
+        for q in self.queues:
+            q.flush()
+        self.db.close()
 
     def _cleaner(self, please_stop):
         while not please_stop:
             (
                 please_stop | Till(seconds=Duration(WRITE_INTERVAL).total_seconds())
             ).wait()
-            self._push_to_s3()
+            self.clean()

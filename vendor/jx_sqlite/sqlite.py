@@ -116,6 +116,7 @@ class Sqlite(DB):
         :param get_trace: GET THE STACK TRACE AND THREAD FOR EVERY DB COMMAND (GOOD FOR DEBUGGING)
         :param upgrade: REPLACE PYTHON sqlite3 DLL WITH MORE RECENT ONE, WITH MORE FUNCTIONS (NOT WORKING)
         :param load_functions: LOAD EXTENDED MATH FUNCTIONS (MAY REQUIRE upgrade)
+        :param debug:
         :param kwargs:
         """
         global _upgraded
@@ -460,7 +461,8 @@ class Sqlite(DB):
             try:
                 # DEAL WITH END-OF-TRANSACTION MESSAGES
                 if query in [COMMIT, ROLLBACK]:
-                    self._close_transaction(command_item)
+                    if transaction:
+                        self._close_transaction(command_item)
                     return
 
                 # EXECUTE QUERY
