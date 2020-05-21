@@ -166,7 +166,6 @@ class TestDirectory(FuzzyTestCase):
         data1 = {"a": 1, "b": 2}
         data2 = {"c": 3, "d": 4}
 
-        # MESSAGE IS NOT EMITTED
         serial1 = queue.add(data1)
         serial2 = queue.add(data2)
 
@@ -175,9 +174,10 @@ class TestDirectory(FuzzyTestCase):
         subscriber1.confirm(subscriber1.pop()[0])
         queue.flush()
         broker.clean()
+
+        # DATABASE NOW EMPTY
         self.assertRaises(Exception, self.assertMessageExists, serial1, queue.id)
         self.assertRaises(Exception, self.assertMessageExists, serial2, queue.id)
-        # DATABASE NOW EMPTY
 
         subscriber2 = broker.replay("test5", look_ahead_serial=0)
         subscriber2.confirm(subscriber2.pop()[0])

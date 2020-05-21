@@ -92,26 +92,27 @@ class Queue:
             return
 
         def chunk():
+            max_size = block_size_mb * 1024 * 1024
             acc = []
             size = 0
             start = first_row(result).serial
             for r in rows(result):
                 s = len(r.content) + 1
-                if acc and s + size > block_size_mb:
+                if acc and s + size > max_size:
                     yield acc, start, False
                     acc = []
                     start = r.serial
                 acc.append(r.content)
                 size += s
             if acc:
-                if size > block_size_mb:
+                if size > max_size:
                     yield acc, start, False  # EXACT BLOCK SIZE
                 else:
                     yield acc, start, True
 
         for lines, start, is_last in chunk():
-            etl_first = json2value(lines[0]).etl[0].queue
-            etl_last = json2value(lines[-1]).etl[0].queue
+            etl_first = json2value(lines[0]).etl.last().queue
+            etl_last = json2value(lines[-1]).etl.last().queue
             key = self._key(kwargs=etl_first)
             Log.note("flush {{num}} lines to {{key}}", key=key, num=len(lines))
             self.broker.backing.write_lines(key, lines)

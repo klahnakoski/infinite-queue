@@ -40,7 +40,8 @@ class Data(object):
             for k, v in kwargs.items():
                 d[literal_field(k)] = unwrap(v)
         else:
-            if args:
+            nargs = len(args)
+            if nargs == 1:
                 args0 = args[0]
                 class_ = _get(args0, CLASS)
                 if class_ is dict:
@@ -49,6 +50,8 @@ class Data(object):
                     _set(self, SLOT, _get(args0, SLOT))
                 else:
                     _set(self, SLOT, dict(args0))
+            elif nargs > 1:
+                get_logger().error("Expecting only one argument, not {{num}}", num=nargs)
             elif kwargs:
                 _set(self, SLOT, unwrap(kwargs))
             else:
@@ -145,8 +148,7 @@ class Data(object):
                 d[seq[-1]] = value
             return self
         except Exception as e:
-            from mo_logs import Log
-            Log.error("can not set key={{key}}", key=key, cause=e)
+            get_logger().error("can not set key={{key}}", key=key, cause=e)
 
     def __getattr__(self, key):
         d = self._internal_dict

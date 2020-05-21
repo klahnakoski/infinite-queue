@@ -1,3 +1,5 @@
+from mo_dots import listwrap, wrap
+
 from infinite_queue.utils import UNCONFIRMED, SUBSCRIBER, MESSAGES, QUEUE
 from jx_sqlite.sqlite import (
     sql_update,
@@ -98,6 +100,12 @@ class Subscription:
             ))
 
             if not result.data:
+                # IS IT THE NEXT BLOCK?
+                
+                # FIND DATE FOR GIVEN SERIAL
+                    # WHAT IS CURRENT SERIAl/DATE
+                    # WHAT IS SERIAL A WEEK AGO?
+                    # EXTRAPOLATE/INTERPOLATE, REPEAT
                 Log.error("not handled yet, load block")
 
             content = first_row(result).content

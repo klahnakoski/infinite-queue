@@ -7,6 +7,7 @@
 #
 # Contact: Kyle Lahnakoski (kyle@lahnakoski.com)
 #
+from infinite_queue import schema
 from infinite_queue.queue import Queue, DEBUG
 from infinite_queue.subscription import Subscription
 from infinite_queue.utils import (
@@ -19,10 +20,8 @@ from infinite_queue.utils import (
 )
 from jx_sqlite.sqlite import (
     Sqlite,
-    sql_create,
     sql_insert,
     sql_query,
-    version_table,
     id_generator,
     quote_value,
 )
@@ -49,75 +48,12 @@ class Broker:
 
         # ENSURE DATABASE IS SETUP
         if not self.db.about(VERSION_TABLE):
-            self._setup()
+            schema.setup(self)
         self.next_id = id_generator(db=self.db, version_table=VERSION_TABLE)
         self.queues = []
         self.please_stop = Signal()
         self.cleaner = Thread.run("cleaner", self._cleaner)
 
-    def _setup(self):
-        version_table(db=self.db, version_table=VERSION_TABLE)
-
-        with self.db.transaction() as t:
-            t.execute(
-                sql_create(
-                    table=QUEUE,
-                    properties={
-                        "id": "INTEGER PRIMARY KEY NOT NULL",
-                        "name": "TEXT NOT NULL",
-                        "next_serial": "LONG NOT NULL",
-                        "block_size_mb": "LONG NOT NULL",
-                        "block_start": "LONG NOT NULL",
-                        "block_end": "LONG NOT NULL",
-                        "block_write": "DOUBLE NOT NULL",
-                    },
-                    unique="name",
-                )
-            )
-
-            t.execute(
-                sql_create(
-                    table=SUBSCRIBER,
-                    properties={
-                        "id": "INTEGER PRIMARY KEY NOT NULL",
-                        "queue": "INTEGER NOT NULL",
-                        "confirm_delay_seconds": "LONG NOT NULL",
-                        "look_ahead_serial": "LONG NOT NULL",
-                        "last_confirmed_serial": "LONG NOT NULL",
-                        "next_emit_serial": "LONG NOT NULL",
-                        "last_emit_timestamp": "DOUBLE NOT NULL",
-                    },
-                    foreign_key={"queue": {"table": QUEUE, "column": "id"}},
-                )
-            )
-
-            t.execute(
-                sql_create(
-                    table=MESSAGES,
-                    properties={
-                        "queue": "INTEGER NOT NULL",
-                        "serial": "LONG NOT NULL",
-                        "content": "TEXT",
-                    },
-                    primary_key=("queue", "serial"),
-                    foreign_key={"queue": {"table": QUEUE, "column": "id"}},
-                )
-            )
-
-            t.execute(
-                sql_create(
-                    table=UNCONFIRMED,
-                    properties={
-                        "subscriber": "LONG NOT NULL",
-                        "serial": "LONG NOT NULL",
-                        "deliver_time": "DOUBLE NOT NULL",
-                    },
-                    foreign_key={
-                        "subscriber": {"table": SUBSCRIBER, "column": "id"},
-                        "serial": {"table": MESSAGES, "column": "id"},
-                    },
-                )
-            )
 
     @override
     def get_or_create_queue(self, name, block_size_mb=8, kwargs=None):
