@@ -1,5 +1,5 @@
 from infinite_queue.broker import Broker
-from infinite_queue.utils import MESSAGES, SUBSCRIBER
+from infinite_queue.utils import MESSAGES, SUBSCRIBER, _path
 from jx_base.expressions import NULL
 from jx_sqlite.sqlite import sql_query, sql_update
 from jx_sqlite.utils import first_row
@@ -47,7 +47,7 @@ class TestDirectory(FuzzyTestCase):
         content = (
             File(config.broker.backing.directory)
             / queue.name
-            / Date.now().format("%Y/%m/%d")
+            / _path(Date.now())
             / "1.json"
         ).read()
         for line in content.split("/n"):
@@ -74,7 +74,7 @@ class TestDirectory(FuzzyTestCase):
         content = (
             File(config.broker.backing.directory)
             / queue.name
-            / Date.now().format("%Y/%m/%d")
+            / _path(Date.now())
             / "1.json"
         ).read()
         for line in content.split("/n"):
@@ -180,7 +180,13 @@ class TestDirectory(FuzzyTestCase):
         self.assertRaises(Exception, self.assertMessageExists, serial2, queue.id)
 
         subscriber2 = broker.replay("test5", look_ahead_serial=0)
-        subscriber2.confirm(subscriber2.pop()[0])
+        serial1 = subscriber2.pop()[0]
+        queue.flush()
+        broker.clean()
+        self.assertMessageExists(serial1, queue.id)
+        self.assertRaises(Exception, self.assertMessageExists, serial2, queue.id)
+
+        subscriber2.confirm(serial1)
         queue.flush()
         broker.clean()
         self.assertRaises(Exception, self.assertMessageExists, serial1, queue.id)

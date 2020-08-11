@@ -11,6 +11,7 @@ from infinite_queue import schema
 from infinite_queue.queue import Queue, DEBUG
 from infinite_queue.subscription import Subscription
 from infinite_queue.utils import (
+    BLOCKS,
     VERSION_TABLE,
     QUEUE,
     SUBSCRIBER,
@@ -79,7 +80,6 @@ class Broker:
                             "block_size_mb": block_size_mb,
                             "block_start": 1,
                             "block_end": 1,
-                            "block_write": Date.now(),
                         },
                     )
                 )
@@ -93,7 +93,7 @@ class Broker:
                             "look_ahead_serial": 1000,
                             "last_confirmed_serial": 0,
                             "next_emit_serial": 1,
-                            "last_emit_timestamp": Date.now(),
+                            "last_emit_timestamp": Date.now()
                         },
                     )
                 )
@@ -190,8 +190,9 @@ class Broker:
                 SQL(
                     f"""
                     SELECT id, block_size_mb, block_start
-                    FROM {QUEUE}
-                    WHERE block_write < {quote_value(now-Duration(WRITE_INTERVAL))}            
+                    FROM {QUEUE} AS q
+                    JOIN {BLOCKS} AS b ON b.queue=q.id AND b.serial=q.block_start
+                    WHERE b.last_used < {quote_value(now-Duration(WRITE_INTERVAL))}            
                     """
                 )
             )

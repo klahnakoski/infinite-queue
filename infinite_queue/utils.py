@@ -10,13 +10,15 @@
 
 from mo_files import File
 from mo_kwargs import override
+from mo_times import Date
 
-TABLE_PREFIX = "infinite_queues"
-VERSION_TABLE = TABLE_PREFIX + "_version"
-QUEUE = TABLE_PREFIX + "_queue"
-SUBSCRIBER = TABLE_PREFIX + "_subscriber"
-MESSAGES = TABLE_PREFIX + "_messages"
-UNCONFIRMED = TABLE_PREFIX + "_unconfirmed"
+TABLE_PREFIX = "irq"
+VERSION_TABLE = "version"
+QUEUE = "queue"
+BLOCKS = "blocks"
+SUBSCRIBER = "subscriber"
+MESSAGES = "messages"
+UNCONFIRMED = "unconfirmed"
 
 
 class DirectoryBacking:
@@ -29,4 +31,11 @@ class DirectoryBacking:
 
     def url(self, key):
         return "file:///" + (self.dir / key).set_extension("json").abspath
+
+    def read_lines(self, key):
+        return (self.dir / key).set_extension("json").read_lines()
+
+
+def _path(timestamp):
+    return Date(timestamp).format("%Y/%m/%d")
 

@@ -1,6 +1,7 @@
 {
   "broker": {
     "database": {
+      "debug": true,
       "upgrade": false,
       "filename": "tests/results/db.sqlite"
     },

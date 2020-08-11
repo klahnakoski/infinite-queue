@@ -1,18 +1,10 @@
-from mo_dots import listwrap, wrap
-
-from infinite_queue.utils import UNCONFIRMED, SUBSCRIBER, MESSAGES, QUEUE
-from jx_sqlite.sqlite import (
-    sql_update,
-    quote_value,
-    sql_insert,
-    sql_query)
+from infinite_queue.utils import UNCONFIRMED, SUBSCRIBER, MESSAGES, QUEUE, BLOCKS
+from jx_sqlite.sqlite import sql_update, quote_value, sql_insert, sql_query
 from jx_sqlite.utils import first_row
 from mo_json import json2value
 from mo_kwargs import override
 from mo_logs import Log
-from mo_sql import (
-    SQL,
-)
+from mo_sql import SQL
 from mo_times import Date
 
 
@@ -62,7 +54,6 @@ class Subscription:
                 )
             )
 
-
             if result.data:
                 record = first_row(result)
                 # RECORD IT WAS SENT AGAIN
@@ -78,35 +69,62 @@ class Subscription:
                         },
                     )
                 )
-                t.execute(
-                    sql_update(
-                        SUBSCRIBER,
-                        {"set": {"last_emit_timestamp": now}}
-                    )
-                )
+                t.execute(sql_update(SUBSCRIBER, {"set": {"last_emit_timestamp": now}}))
                 return record.serial, record.content
 
-            # IS THERE A FRESH MESSAGE?
+            # IS THERE A NEVER-SENT MESSAGE?
             serial = self._next_serial(t)
             if not serial:
                 return 0, None
 
-            result = t.query(sql_query(
-                {
-                    "select": "content",
-                    "from": MESSAGES,
-                    "where": {"eq": {"queue": self.queue.id, "serial": serial}},
-                }
-            ))
+            result = t.query(
+                sql_query(
+                    {
+                        "select": "content",
+                        "from": MESSAGES,
+                        "where": {"eq": {"queue": self.queue.id, "serial": serial}},
+                    }
+                )
+            )
 
             if not result.data:
-                # IS IT THE NEXT BLOCK?
-                
-                # FIND DATE FOR GIVEN SERIAL
-                    # WHAT IS CURRENT SERIAl/DATE
-                    # WHAT IS SERIAL A WEEK AGO?
-                    # EXTRAPOLATE/INTERPOLATE, REPEAT
-                Log.error("not handled yet, load block")
+                result = t.query(
+                    SQL(
+                        f"""
+                        SELECT 
+                            serial,
+                            path
+                        FROM 
+                            {BLOCKS}
+                        WHERE
+                            queue = {quote_value(self.queue.id)} AND
+                            serial <= {quote_value(serial)}
+                        ORDER BY
+                            serial DESC
+                        LIMIT 1
+                        """
+                    )
+                )
+
+                if not result.data:
+                    Log.error("not expected")
+
+                row = first_row(result)
+                self.queue.load(path=row.path, start=row.serial)
+
+                # RETRY
+                result = t.query(
+                    sql_query(
+                        {
+                            "select": "content",
+                            "from": MESSAGES,
+                            "where": {"eq": {"queue": self.queue.id, "serial": serial}},
+                        }
+                    )
+                )
+
+                if not result.data:
+                    Log.error("not expected")
 
             content = first_row(result).content
 
@@ -115,31 +133,28 @@ class Subscription:
             t.execute(
                 sql_insert(
                     UNCONFIRMED,
-                    {
-                        "subscriber": self.id,
-                        "serial": serial,
-                        "deliver_time": now,
-                    },
+                    {"subscriber": self.id, "serial": serial, "deliver_time": now},
                 )
             )
-            t.execute(
-                sql_update(
-                    SUBSCRIBER,
-                    {"set": {"last_emit_timestamp": now}}
-                )
-            )
+            t.execute(sql_update(SUBSCRIBER, {"set": {"last_emit_timestamp": now}}))
 
             return serial, content
 
     def confirm(self, serial):
         with self.queue.broker.db.transaction() as t:
-            t.execute(SQL(f"""
+            t.execute(
+                SQL(
+                    f"""
                 DELETE FROM {UNCONFIRMED}
                 WHERE
                     subscriber = {quote_value(self.id)} AND
                     serial = {quote_value(serial)}
-            """))
-            t.execute(SQL(f"""
+            """
+                )
+            )
+            t.execute(
+                SQL(
+                    f"""
                 UPDATE {SUBSCRIBER} SET last_confirmed_serial=COALESCE(
                     (
                     SELECT min(serial) 
@@ -148,7 +163,9 @@ class Subscription:
                     ), 
                     next_emit_serial               
                 )-1
-            """))
+            """
+                )
+            )
 
     def _next_serial(self, t):
         """
@@ -156,7 +173,9 @@ class Subscription:
         """
 
         # TEST IF THERE ARE MESSAGES TO EMIT
-        result = t.query(SQL(f"""
+        result = t.query(
+            SQL(
+                f"""
             SELECT
                 s.next_emit_serial
             FROM
@@ -166,7 +185,9 @@ class Subscription:
             WHERE
                 s.id = {quote_value(self.id)} AND
                 q.next_serial > s.next_emit_serial
-        """))
+        """
+            )
+        )
 
         if not result.data:
             # NO NEW MESSAGES

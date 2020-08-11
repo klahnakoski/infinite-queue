@@ -9,17 +9,18 @@
 #
 from mo_sql import SQL
 
-from infinite_queue.utils import MESSAGES, QUEUE
+from infinite_queue.utils import MESSAGES, QUEUE, BLOCKS, _path
 from jx_sqlite.sqlite import sql_insert, sql_query, sql_update, quote_value
 from jx_sqlite.utils import first_row, rows
 from mo_dots import listwrap, Data, wrap
 from mo_future import first, text
 from mo_json import value2json, json2value
 from mo_kwargs import override
-from mo_times import Date
+from mo_times import Date, Timer
 from vendor.mo_logs import Log
 
 DEBUG = True
+
 
 class Queue:
     @override
@@ -36,7 +37,7 @@ class Queue:
 
         with self.broker.db.transaction() as t:
             serial = self._next_serial(t)
-            key = self._key(now, serial)
+            key = self._key(path=_path(now), serial=serial)
             message.etl = listwrap(message.etl)
             message.etl.append(
                 {
@@ -66,7 +67,7 @@ class Queue:
                     {
                         "select": ["block_size_mb", "block_start"],
                         "from": QUEUE,
-                        "where": {"eq": {"id": self.id}}
+                        "where": {"eq": {"id": self.id}},
                     }
                 )
             )
@@ -75,7 +76,9 @@ class Queue:
     @override
     def _flush(self, block_size_mb, block_start):
         with self.broker.db.transaction() as t:
-            result = t.query(SQL(f"""
+            result = t.query(
+                SQL(
+                    f"""
                 SELECT
                     serial,
                     content
@@ -86,7 +89,9 @@ class Queue:
                     queue = {quote_value(self.id)}
                 ORDER BY
                     serial
-            """))
+            """
+                )
+            )
 
         if not result.data:
             return
@@ -113,22 +118,66 @@ class Queue:
         for lines, start, is_last in chunk():
             etl_first = json2value(lines[0]).etl.last().queue
             etl_last = json2value(lines[-1]).etl.last().queue
-            key = self._key(kwargs=etl_first)
+            path = _path(etl_first.timestamp)
+            key = self._key(path=path, serial=etl_first.serial)
             Log.note("flush {{num}} lines to {{key}}", key=key, num=len(lines))
             self.broker.backing.write_lines(key, lines)
-            result = Data(block_end=etl_last.serial + 1, block_write=Date.now())
+            result = Data(block_end=etl_last.serial + 1)
             if not is_last:
                 # UPDATE start TO MARK MESSAGES FOR DB REMOVAL
                 result.block_start = etl_last.serial + 1
 
             with self.broker.db.transaction() as t:
                 t.execute(sql_update(QUEUE, {"set": result}))
+                result = t.query(
+                    sql_query(
+                        {
+                            "select": "path",
+                            "from": BLOCKS,
+                            "where": {"eq": {
+                                "queue": self.id,
+                                "serial": etl_first.serial,
+                            }}
+                        }
+                    )
+                )
+                if result.data:
+                    t.execute(
+                        sql_update(
+                            BLOCKS,
+                            {
+                                "set": {"last_used": Date.now()},
+                                "where": {"eq": {"queue": self.id, "serial": etl_first.serial}},
+                            },
+                        )
+                    )
+                else:
+                    t.execute(
+                        sql_insert(
+                            BLOCKS,
+                            {
+                                "queue": self.id,
+                                "serial": etl_first.serial,
+                                "path": path,
+                                "last_used": Date.now(),
+                            },
+                        )
+                    )
 
-    @override
-    def _key(self, timestamp, serial):
-        if not timestamp or not serial:
-            Log.error("expecting parameters")
-        return self.name + "/" + Date(timestamp).format("%Y/%m/%d") + "/" + text(serial)
+    def load(self, path, start):
+        key = self._key(path=path, serial=start)
+        with self.broker.db.transaction() as t:
+            with Timer("load lines from {{key}}", param={"key": key}):
+                for line in self.broker.backing.read_lines(key):
+                    s = json2value(line).etl.last().queue.serial
+                    t.execute(
+                        sql_insert(
+                            MESSAGES, {"serial": s, "queue": self.id, "content": line}
+                        )
+                    )
+
+    def _key(self, serial, path):
+        return self.name + "/" + path + "/" + text(serial)
 
     def _next_serial(self, t):
         """

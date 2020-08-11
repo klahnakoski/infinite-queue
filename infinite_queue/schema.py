@@ -13,7 +13,7 @@ from infinite_queue.utils import (
     SUBSCRIBER,
     MESSAGES,
     UNCONFIRMED,
-)
+    BLOCKS)
 from jx_sqlite.sqlite import (
     sql_create,
     version_table,
@@ -33,10 +33,23 @@ def setup(broker):
                     "next_serial": "LONG NOT NULL",
                     "block_size_mb": "LONG NOT NULL",
                     "block_start": "LONG NOT NULL",
-                    "block_end": "LONG NOT NULL",
-                    "block_write": "DOUBLE NOT NULL",
+                    "block_end": "LONG NOT NULL"
                 },
                 unique="name",
+            )
+        )
+
+        t.execute(
+            sql_create(
+                table=BLOCKS,
+                properties={
+                    "queue": "INTEGER NOT NULL",
+                    "serial": "LONG NOT NULL",
+                    "path": "TEXT NOT NULL",
+                    "last_used": "DOUBLE NOT NULL",
+                },
+                primary_key=("queue", "serial"),
+                foreign_key={"queue": {"table": QUEUE, "column": "id"}},
             )
         )
 
